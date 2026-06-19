@@ -1,3 +1,7 @@
+# NOTE: This `main` is the standalone Hono-only entry (no SSR). The production
+# entry is the TanStack Start + Nitro build at apps/web/.output/server/index.mjs.
+# Use `pnpm dev` (build + wrangler dev -c apps/web/.output/server/wrangler.json),
+# not a bare `wrangler dev`, to serve SSR. See README "Stack integration outcome".
 name = "veritra"
 main = "apps/web/src/worker.ts"
 compatibility_date = "2026-06-01"

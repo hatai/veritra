@@ -1,38 +1,15 @@
-import { Hono } from "hono";
-import { trpcServer } from "@hono/trpc-server";
-import { appRouter } from "./server/router";
-import { createDb } from "@veritra/db";
-import { createAuth } from "./server/auth";
-
-type Env = { LIBSQL_URL: string; LIBSQL_AUTH_TOKEN?: string; AUTH_SECRET: string; BASE_URL: string };
-
-function requireEnv(env: Env): { secret: string; baseURL: string } {
-  if (!env.AUTH_SECRET) throw new Error("AUTH_SECRET is required");
-  if (!env.BASE_URL) throw new Error("BASE_URL is required");
-  return { secret: env.AUTH_SECRET, baseURL: env.BASE_URL };
-}
-
-const app = new Hono<{ Bindings: Env }>();
-
-app.on(["GET", "POST"], "/api/auth/*", (c) => {
-  const db = createDb(c.env.LIBSQL_URL, c.env.LIBSQL_AUTH_TOKEN);
-  const auth = createAuth(db, requireEnv(c.env));
-  return auth.handler(c.req.raw);
-});
-
-app.use("/api/trpc/*", (c) =>
-  trpcServer({
-    endpoint: "/api/trpc",
-    router: appRouter,
-    createContext: async () => {
-      const db = createDb(c.env.LIBSQL_URL, c.env.LIBSQL_AUTH_TOKEN);
-      const auth = createAuth(db, requireEnv(c.env));
-      const s = await auth.api.getSession({ headers: c.req.raw.headers });
-      return { db, session: s ? { userId: s.user.id } : null };
-    },
-  })(c, async () => {}),
-);
-
-app.get("/healthz", (c) => c.text("ok"));
-
-export default app;
+// Standalone Hono Worker entry (tRPC + better-auth + /healthz).
+//
+// Stack integration outcome (spike decision, spec §5.4): approach A — importing
+// the TanStack Start SSR handler into this raw esbuild-bundled worker — is
+// infeasible, because Start's createStartHandler resolves build-time virtual
+// modules (#tanstack-router-entry, #tanstack-start-entry) and the client
+// manifest that only the Vite/Nitro build graph can provide. We therefore use
+// approach B: TanStack Start + Nitro (cloudflare_module preset) owns the Worker
+// entry, and this Hono app is mounted under it via Start server routes
+// (src/routes/api/$.tsx and src/routes/healthz.tsx). The built Worker lives in
+// apps/web/.output and is what `wrangler dev` runs.
+//
+// This file is retained as the canonical definition of the Hono app and as a
+// standalone entry usable without the SSR build.
+export { app as default } from "./server/hono-app";

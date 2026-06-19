@@ -1,5 +1,8 @@
 node_modules/
 dist/
+.output/
+.nitro/
+.tanstack/
 .env
 .env.*
 !.env.example
