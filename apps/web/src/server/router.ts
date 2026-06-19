@@ -1,10 +1,12 @@
 import * as v from "valibot";
-import { router, publicProcedure } from "./trpc";
+import { router, publicProcedure, protectedProcedure } from "./trpc";
 import { schema } from "@veritra/db";
 
 const PingInput = v.object({ name: v.pipe(v.string(), v.minLength(1)) });
 
 export const appRouter = router({
+  me: protectedProcedure.query(({ ctx }) => ({ userId: ctx.session.userId })),
+
   ping: publicProcedure
     .input((raw) => v.parse(PingInput, raw))
     .query(({ input }) => ({ message: `hello ${input.name}` })),
