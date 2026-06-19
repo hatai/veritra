@@ -10,14 +10,12 @@ describe("notes table", () => {
     await db.run(
       "CREATE TABLE IF NOT EXISTS notes (id text primary key, body text not null, created_at integer not null)",
     );
+    await db.run("DELETE FROM notes");
   });
 
   it("inserts and reads back a note", async () => {
     const id = "spike-1";
-    await db
-      .insert(notes)
-      .values({ id, body: "hello", createdAt: new Date() })
-      .onConflictDoUpdate({ target: notes.id, set: { body: "hello" } });
+    await db.insert(notes).values({ id, body: "hello", createdAt: new Date() });
     const rows = await db.select().from(notes).where(eq(notes.id, id));
     expect(rows[0]?.body).toBe("hello");
   });
