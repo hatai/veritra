@@ -8,7 +8,7 @@
     "lint": "vp lint",
     "format": "vp format",
     "build": "pnpm --filter @veritra/web build",
-    "dev": "pnpm build && cp -f .dev.vars apps/web/.output/server/.dev.vars 2>/dev/null; wrangler dev -c apps/web/.output/server/wrangler.json",
+    "dev": "pnpm build && { cp -f .dev.vars apps/web/.output/server/.dev.vars 2>/dev/null || true; } && wrangler dev -c apps/web/.output/server/wrangler.json",
     "db:up": "docker compose up -d",
     "db:migrate": "pnpm --filter @veritra/db migrate"
   },
