@@ -28,6 +28,19 @@ jobs:
 
       - run: pnpm lint
 
+      - name: Wait for libSQL
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/health; then echo " libSQL ready"; exit 0; fi
+            sleep 1
+          done
+          echo "libSQL did not become ready" >&2; exit 1
+
+      - name: Migrate database schema
+        run: pnpm db:migrate
+        env:
+          LIBSQL_URL: "http://127.0.0.1:8080"
+
       - run: pnpm test:run
         env:
           LIBSQL_URL: "http://127.0.0.1:8080"
