@@ -10,7 +10,7 @@ export function createAuth(db: Db, opts: { secret: string; baseURL: string }) {
     baseURL: opts.baseURL,
     trustedOrigins: [opts.baseURL],
     advanced: {
-      useSecureCookies: false,
+      useSecureCookies: opts.baseURL.startsWith("https"),
     },
   });
 }
