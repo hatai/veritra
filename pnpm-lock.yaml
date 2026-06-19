@@ -35,9 +35,6 @@ importers:
       '@tanstack/react-start':
         specifier: ~1.168.0
         version: 1.168.26(crossws@0.4.6(srvx@0.11.17))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.16(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0))
-      '@tanstack/router-plugin':
-        specifier: ^1.132.0
-        version: 1.168.18(@tanstack/react-router@1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(vite@8.0.16(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0))
       '@trpc/client':
         specifier: ^11.0.0
         version: 11.18.0(@trpc/server@11.18.0(typescript@6.0.3))(typescript@6.0.3)
@@ -53,9 +50,6 @@ importers:
       hono:
         specifier: ^4.6.0
         version: 4.12.26
-      nitro:
-        specifier: npm:nitro-nightly@3.0.1-20260619-111502-ca57c6e5
-        version: nitro-nightly@3.0.1-20260619-111502-ca57c6e5(@libsql/client@0.14.0)(chokidar@5.0.0)(jiti@2.7.0)(miniflare@4.20260617.1)(vite@8.0.16(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0))(wrangler@4.103.0)
       react:
         specifier: ^19.2.0
         version: 19.2.7
@@ -72,6 +66,9 @@ importers:
       '@tanstack/router-cli':
         specifier: ^1.132.0
         version: 1.167.17
+      '@tanstack/router-plugin':
+        specifier: ^1.132.0
+        version: 1.168.18(@tanstack/react-router@1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(vite@8.0.16(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0))
       '@types/node':
         specifier: ^22.10.2
         version: 22.19.21
@@ -84,6 +81,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.1
         version: 6.0.2(vite@8.0.16(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0))
+      nitro:
+        specifier: npm:nitro-nightly@3.0.1-20260619-111502-ca57c6e5
+        version: nitro-nightly@3.0.1-20260619-111502-ca57c6e5(@libsql/client@0.14.0)(chokidar@5.0.0)(jiti@2.7.0)(miniflare@4.20260617.1)(vite@8.0.16(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0))(wrangler@4.103.0)
 
   packages/core: {}
 

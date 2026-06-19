@@ -2,6 +2,50 @@
 
 Test-design web app.
 
+## Dev Workflow
+
+### Prerequisites
+
+- **Node.js** ≥ 22 (see `engines` in `package.json`)
+- **pnpm** 10.x (`corepack enable && corepack prepare pnpm@10.32.1 --activate`)
+- **Docker** (for local libSQL — see note below)
+
+### Local setup
+
+```sh
+# 1. Install dependencies
+pnpm install
+
+# 2. Start the libSQL database
+#    Requires Docker. On WSL2, Docker Desktop with "WSL integration" enabled is
+#    needed, or start the container externally before running this.
+pnpm db:up
+
+# 3. Run database migrations
+pnpm db:migrate
+
+# 4. Start the dev server (builds first, then runs wrangler dev)
+#    Listens on http://localhost:8787
+pnpm dev
+```
+
+### Testing and linting
+
+```sh
+# Run all tests (requires libSQL running at http://127.0.0.1:8080)
+LIBSQL_URL=http://127.0.0.1:8080 pnpm test:run
+
+# Run lint
+pnpm lint
+```
+
+### Notes on `pnpm dev`
+
+`pnpm dev` runs `pnpm build` (TanStack Start + Nitro → `apps/web/.output/`) then
+`wrangler dev -c apps/web/.output/server/wrangler.json`. It also copies `.dev.vars`
+into the output directory so wrangler picks up `AUTH_SECRET`/`BASE_URL`. The Nitro
+dev server is **not** used — wrangler provides the workerd runtime.
+
 ## Toolchain Notes
 
 - **Vite+** (`vite-plus@0.2.1`): The local CLI binary is `vp` (not `vite-plus`). All root scripts (`test`, `test:run`, `lint`, `format`) invoke `vp` accordingly.
