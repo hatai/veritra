@@ -9,5 +9,9 @@
     "@libsql/client": "^0.14.0",
     "drizzle-orm": "^0.38.0"
   },
-  "devDependencies": { "drizzle-kit": "^0.30.0" }
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "drizzle-kit": "^0.30.0",
+    "vitest": "4.1.9"
+  }
 }
