@@ -121,7 +121,7 @@ TestCase(テストケース)
 |----|------|
 | ランタイム / パッケージマネージャ | **Node.js**（ローカル開発ランタイム）+ **pnpm**（PM、pnpm workspaces）。本番 Cloudflare Workers(workerd) は Node でも Bun でもないため、アプリコードは Workers 互換を維持し Node 専用 API を避ける |
 | ツールチェーン | **Vite+**（Vite 8/Rolldown・Vitest・Oxlint・Oxfmt・tsdown・Vite Task）。`vite.config.ts` 一枚で構成。**置換可能層として扱う** |
-| 言語 | **TypeScript v7 (RC)** |
+| 言語 | **TypeScript v7 (RC)**（`typescript@7.0.1-rc`）。Vite+ 0.2.1 の peer dep は `^5\|\|^6` だが、`pnpm-workspace.yaml` の `overrides` + `peerDependencyRules.allowedVersions` で TS7 を強制し Vite+ と併存（lint/test/build/typecheck すべて TS7 で緑を確認） |
 | フロント / メタフレームワーク | **TanStack Start**（React, SSR/CSR） |
 | サーバ / エッジ | **Hono.js**（Cloudflare Worker のエントリ） |
 | RPC | **tRPC** |
