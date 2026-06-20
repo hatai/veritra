@@ -1,0 +1,30 @@
+{
+  "name": "veritra",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vp test",
+    "test:run": "vp test run",
+    "lint": "vp lint",
+    "format": "vp format",
+    "build": "pnpm --filter @veritra/web build",
+    "dev": "pnpm build && { cp -f .dev.vars apps/web/.output/server/.dev.vars 2>/dev/null || true; } && wrangler dev -c apps/web/.output/server/wrangler.json",
+    "db:up": "docker compose up -d",
+    "db:migrate": "pnpm --filter @veritra/db migrate",
+    "typecheck": "tsc -p apps/web/tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "7.0.1-rc",
+    "vite": "^8.0.0",
+    "vite-plus": "0.2.1",
+    "vitest": "4.1.9",
+    "wrangler": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
