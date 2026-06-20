@@ -36,7 +36,7 @@ Expected: `200`. If not 200, **stop and ask the user to start the container on t
 2. **Coverage core = pure functions over an in-memory graph** (spec §4). `packages/core` never touches the DB; the caller passes already active-filtered, project-scoped arrays. Core additionally filters each edge list to edges whose both endpoints are present in the active node sets (defensive — keeps results correct regardless of caller).
 3. **Coverage gap rules are local child-count checks** (spec §4.2 table), not full reachability: `uncovered-requirement` = 0 child viewpoint edges; `uncovered-viewpoint` = 0 child condition edges; `uncovered-condition` = 0 child case edges; `orphan` = a Viewpoint/Condition/TestCase with 0 parent edges (Requirement is the root → never orphan). `reach-count` is the only full-reachability metric: per requirement, `COUNT(DISTINCT case_id)` over `requirement→viewpoint→condition→case`.
 4. **`position` uses the `fractional-indexing` library** (zero-dep, pure TS, Workers-safe), wrapped by thin `packages/core` helpers — chosen over a hand-rolled implementation because correct fractional indexing (jitter, prefix/edge cases) is subtle and the library is battle-tested. DRY/YAGNI.
-5. **`provenance` / `derivation` / `steps` are JSON-text columns** (`text(..., { mode: "json" })`) typed via `$type<>()` using domain types from `packages/core`, validated with valibot at the read/write boundary.
+5. **`provenance` / `derivation` / `steps` are JSON-text columns** (`text(..., { mode: "json" })`) typed via `$type<>()` using domain types from `packages/core`. **Runtime row validation is deferred to Plan 3.** `$type<>()` is compile-time only — it does not parse rows. Plan 2 *defines and unit-tests* the valibot validators (Task 3) so the Plan 3 tRPC write/read boundary can parse with them; Plan 2 does not wire runtime parsing into any read/write path (the only Plan 2 writer, the minimal Project slice in Task 9, writes no JSON value-objects). Do not claim Plan 2 enforces JSON/enum validity at runtime — it does not.
 6. **`created_by` is a plain text column (no FK)** so it survives user deletion (spec §3.4 "created_by は保持"). `membership.user_id` keeps a FK with `ON DELETE CASCADE` (spec "User 削除時は Membership を外す").
 7. **Last-admin protection is NOT encoded in schema** (it is a per-project admin-count invariant, not expressible in SQLite). `membership.role` column only; enforcement is Plan 3.
 
@@ -63,19 +63,20 @@ packages/
 │     └─ health.test.ts         # DELETE (spike residue)
 └─ db/
    ├─ package.json              # MODIFY: bump drizzle-orm ^0.45; add @veritra/core (types)
-   ├─ tsconfig.json             # CREATE: extends ../../tsconfig.base.json
+   ├─ tsconfig.json             # CREATE: extends base; EXCLUDE src/**/*.test.ts (tests use process.env — Node-only)
    └─ src/
       ├─ client.ts              # MODIFY (Task 8 only if needed): PRAGMA foreign_keys handling
       ├─ schema.ts              # MODIFY: remove notes; add 6 entity + 3 edge tables
       └─ schema.test.ts         # MODIFY: drop notes round-trip; add entity + FK/CASCADE tests
 apps/web/
-   ├─ tsconfig.json             # MODIFY: drop "node" from types; add workers types (prereq #3)
+   ├─ tsconfig.json               # MODIFY: drop "node" from types; add workers types (prereq #3)
    └─ src/
-      ├─ server/router.ts       # MODIFY: remove notes.*; add minimal project.create/list
-      ├─ routes/index.tsx       # MODIFY: render projects instead of notes
+      ├─ server/router.ts         # MODIFY: remove notes.*; add minimal project.create/list
+      ├─ server/notes-fn.ts       # RENAME → projects-fn.ts: createServerFn calling caller.project.list()
+      ├─ routes/index.tsx         # MODIFY: import projects-fn; render projects instead of notes
       └─ tests/
          ├─ trpc.integration.test.ts   # MODIFY: notes → project round-trip
-         └─ seam.integration.test.ts   # CREATE: SSR/createServerFn/__env__ seam (prereq #7)
+         └─ seam.integration.test.ts   # CREATE: __env__ → Hono → tRPC → libSQL seam (prereq #7)
 package.json                    # MODIFY: typecheck script → all packages (prereq #2)
 .github/workflows/ci.yml        # MODIFY: add typecheck + build steps (prereq #5)
 ```
@@ -153,7 +154,9 @@ Note the exact `compilerOptions.types` array in `apps/web/tsconfig.json` and wha
 }
 ```
 
-- [ ] **Step 3: Create `packages/db/tsconfig.json`**
+- [ ] **Step 3: Create `packages/db/tsconfig.json` (exclude tests — they are Node-only)**
+
+`packages/db/src/schema.test.ts` reads `process.env.LIBSQL_URL`, which needs Node globals. The base tsconfig sets `types: ["vitest/globals"]` only (no `@types/node`), and `packages/db` production code must stay Workers-safe (no Node types). So the **production** typecheck excludes test files; the tests run under vitest (Node env) where `process.env` exists at runtime.
 
 `packages/db/tsconfig.json`:
 ```json
@@ -162,9 +165,12 @@ Note the exact `compilerOptions.types` array in `apps/web/tsconfig.json` and wha
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
 }
 ```
+
+> Do **not** add `"node"` to `packages/db` types to silence the test's `process.env` — that would let Node-only APIs leak into Workers-bound production code (`client.ts`/`schema.ts`) undetected. Excluding test files keeps the type guard meaningful. (`packages/core` tests use no Node globals, so its config in Step 2 includes `src` without an exclude.) If full test typechecking is wanted later, add a separate Node-aware `tsconfig.test.json` in Plan 3+.
 
 - [ ] **Step 4: Expand the root `typecheck` script to all packages**
 
@@ -221,7 +227,7 @@ git commit -m "chore(toolchain): per-package tsconfig, typecheck all packages, d
 
 ## Task 3: `packages/core` domain value types + valibot validators (replaces spike `add()`/`health`)
 
-**Why:** The JSON-column value objects (`Provenance`, `Derivation`, `Step`, plus `Role`/`Priority` enums) are domain types used by both `packages/db` (`$type<>()`) and the future API. They live in `packages/core` as the single source of truth, with valibot validators for the read/write boundary. This task also removes the spike `add()`/`health.ts`.
+**Why:** The JSON-column value objects (`Provenance`, `Derivation`, `Step`, plus `Role`/`Priority` enums) are domain types used by both `packages/db` (`$type<>()`) and the future API. They live in `packages/core` as the single source of truth, **with valibot validators that Plan 3 will use at the tRPC read/write boundary** (Plan 2 only defines and unit-tests them — it does not wire runtime parsing; see decision #5). This task also removes the spike `add()`/`health.ts`.
 
 **Files:**
 - Create: `packages/core/src/types.ts`, `packages/core/src/types.test.ts`
@@ -985,48 +991,110 @@ git commit -m "feat(db): many-to-many edge tables with composite-FK same-project
 **Why:** The composite-FK design (user's chosen integrity model) only works if `PRAGMA foreign_keys=ON` is in effect over the `@libsql/client/web` HTTP client. SQLite defaults FK enforcement **off**; libSQL server *may* default it on. **Verify empirically.** This is the gate that proves the whole integrity decision holds; if it fails and cannot be fixed via the web client, escalate.
 
 **Files:**
-- Modify: `packages/db/src/schema.test.ts` (add two tests)
+- Modify: `packages/db/src/schema.test.ts` (add the FK test block below)
 - Possibly modify: `packages/db/src/client.ts` (only if FK is not enforced by default)
+
+> **Coverage requirement (this is the gate — do not narrow it):** the tests must exercise **all three edge tables** (`requirement_viewpoint`, `viewpoint_condition`, `condition_case`), **both endpoint cascades** per edge (deleting the parent *and* deleting the child each remove the edge), and **real cross-project rejection** using **two distinct, actually-inserted projects** (not a fabricated non-existent `project_id`). A single FK direction passing is not sufficient evidence that the other five composite FKs are wired and ordered correctly.
 
 - [ ] **Step 1: Write the failing/abort tests**
 
-Append to `packages/db/src/schema.test.ts`:
+Append to `packages/db/src/schema.test.ts`. (Extend the existing top-of-file imports from `./schema` to include all the tables used here: `project, requirement, viewpoint, condition, testCase, requirementViewpoint, viewpointCondition, conditionCase`.)
 ```ts
-import { project, requirement, viewpoint, requirementViewpoint } from "./schema";
-
-describe("foreign-key enforcement (composite FK, same-project + cascade)", () => {
-  async function seedPair() {
+describe("foreign-key enforcement (composite FK: both-endpoint cascade + cross-project rejection)", () => {
+  const now = new Date();
+  const mkProject = async () => {
     const pid = `proj-${crypto.randomUUID()}`;
-    const now = new Date();
     await db.insert(project).values({ id: pid, title: "P", createdAt: now, updatedAt: now, createdBy: "u" });
-    const rid = `req-${crypto.randomUUID()}`;
-    const vid = `vp-${crypto.randomUUID()}`;
-    await db.insert(requirement).values({ id: rid, projectId: pid, title: "R", createdAt: now, updatedAt: now, createdBy: "u" });
-    await db.insert(viewpoint).values({ id: vid, projectId: pid, title: "V", createdAt: now, updatedAt: now, createdBy: "u" });
-    return { pid, rid, vid };
-  }
+    return pid;
+  };
+  const mkReq = async (pid: string) => {
+    const id = `req-${crypto.randomUUID()}`;
+    await db.insert(requirement).values({ id, projectId: pid, title: "R", createdAt: now, updatedAt: now, createdBy: "u" });
+    return id;
+  };
+  const mkVp = async (pid: string) => {
+    const id = `vp-${crypto.randomUUID()}`;
+    await db.insert(viewpoint).values({ id, projectId: pid, title: "V", createdAt: now, updatedAt: now, createdBy: "u" });
+    return id;
+  };
+  const mkCond = async (pid: string) => {
+    const id = `cond-${crypto.randomUUID()}`;
+    await db.insert(condition).values({ id, projectId: pid, title: "C", createdAt: now, updatedAt: now, createdBy: "u" });
+    return id;
+  };
+  const mkCase = async (pid: string) => {
+    const id = `case-${crypto.randomUUID()}`;
+    await db.insert(testCase).values({ id, projectId: pid, title: "T", steps: [], createdAt: now, updatedAt: now, createdBy: "u" });
+    return id;
+  };
 
-  it("CASCADE: deleting a requirement removes its edges", async () => {
-    const { pid, rid, vid } = await seedPair();
+  // ---- requirement_viewpoint ----
+  it("RV: cascades when the requirement (parent) is deleted", async () => {
+    const pid = await mkProject();
+    const rid = await mkReq(pid), vid = await mkVp(pid);
     await db.insert(requirementViewpoint).values({ projectId: pid, requirementId: rid, viewpointId: vid, position: "a0" });
     await db.delete(requirement).where(eq(requirement.id, rid));
-    const edges = await db
-      .select()
-      .from(requirementViewpoint)
-      .where(eq(requirementViewpoint.requirementId, rid));
-    expect(edges).toHaveLength(0); // cascaded away
+    expect(await db.select().from(requirementViewpoint).where(eq(requirementViewpoint.requirementId, rid))).toHaveLength(0);
+  });
+  it("RV: cascades when the viewpoint (child) is deleted", async () => {
+    const pid = await mkProject();
+    const rid = await mkReq(pid), vid = await mkVp(pid);
+    await db.insert(requirementViewpoint).values({ projectId: pid, requirementId: rid, viewpointId: vid, position: "a0" });
+    await db.delete(viewpoint).where(eq(viewpoint.id, vid));
+    expect(await db.select().from(requirementViewpoint).where(eq(requirementViewpoint.viewpointId, vid))).toHaveLength(0);
+  });
+  it("RV: rejects an edge linking a requirement and viewpoint from different projects", async () => {
+    const pA = await mkProject(), pB = await mkProject();
+    const rid = await mkReq(pA), vid = await mkVp(pB);
+    // edge.project_id = pA matches the requirement but NOT the viewpoint → (pA, vid) has no parent row → reject
+    await expect(
+      db.insert(requirementViewpoint).values({ projectId: pA, requirementId: rid, viewpointId: vid, position: "a0" }),
+    ).rejects.toThrow();
   });
 
-  it("rejects an edge whose project_id does not match the parent's", async () => {
-    const { pid, rid, vid } = await seedPair();
-    // wrong project_id on the edge → composite FK has no matching parent row → must throw
+  // ---- viewpoint_condition ----
+  it("VC: cascades when the viewpoint (parent) is deleted", async () => {
+    const pid = await mkProject();
+    const vid = await mkVp(pid), cid = await mkCond(pid);
+    await db.insert(viewpointCondition).values({ projectId: pid, viewpointId: vid, conditionId: cid, position: "a0" });
+    await db.delete(viewpoint).where(eq(viewpoint.id, vid));
+    expect(await db.select().from(viewpointCondition).where(eq(viewpointCondition.viewpointId, vid))).toHaveLength(0);
+  });
+  it("VC: cascades when the condition (child) is deleted", async () => {
+    const pid = await mkProject();
+    const vid = await mkVp(pid), cid = await mkCond(pid);
+    await db.insert(viewpointCondition).values({ projectId: pid, viewpointId: vid, conditionId: cid, position: "a0" });
+    await db.delete(condition).where(eq(condition.id, cid));
+    expect(await db.select().from(viewpointCondition).where(eq(viewpointCondition.conditionId, cid))).toHaveLength(0);
+  });
+  it("VC: rejects an edge linking a viewpoint and condition from different projects", async () => {
+    const pA = await mkProject(), pB = await mkProject();
+    const vid = await mkVp(pA), cid = await mkCond(pB);
     await expect(
-      db.insert(requirementViewpoint).values({
-        projectId: `other-${crypto.randomUUID()}`,
-        requirementId: rid,
-        viewpointId: vid,
-        position: "a0",
-      }),
+      db.insert(viewpointCondition).values({ projectId: pA, viewpointId: vid, conditionId: cid, position: "a0" }),
+    ).rejects.toThrow();
+  });
+
+  // ---- condition_case ----
+  it("CC: cascades when the condition (parent) is deleted", async () => {
+    const pid = await mkProject();
+    const cid = await mkCond(pid), tid = await mkCase(pid);
+    await db.insert(conditionCase).values({ projectId: pid, conditionId: cid, caseId: tid, position: "a0" });
+    await db.delete(condition).where(eq(condition.id, cid));
+    expect(await db.select().from(conditionCase).where(eq(conditionCase.conditionId, cid))).toHaveLength(0);
+  });
+  it("CC: cascades when the test case (child) is deleted", async () => {
+    const pid = await mkProject();
+    const cid = await mkCond(pid), tid = await mkCase(pid);
+    await db.insert(conditionCase).values({ projectId: pid, conditionId: cid, caseId: tid, position: "a0" });
+    await db.delete(testCase).where(eq(testCase.id, tid));
+    expect(await db.select().from(conditionCase).where(eq(conditionCase.caseId, tid))).toHaveLength(0);
+  });
+  it("CC: rejects an edge linking a condition and case from different projects", async () => {
+    const pA = await mkProject(), pB = await mkProject();
+    const cid = await mkCond(pA), tid = await mkCase(pB);
+    await expect(
+      db.insert(conditionCase).values({ projectId: pA, conditionId: cid, caseId: tid, position: "a0" }),
     ).rejects.toThrow();
   });
 });
@@ -1039,8 +1107,8 @@ Run (DB up):
 pnpm --filter @veritra/db exec vitest run src/schema.test.ts
 ```
 
-- **If both new tests PASS:** FK enforcement is on by default over the web client. No client change needed. Skip to Step 4.
-- **If they FAIL** (the cross-project insert succeeds / the cascade leaves edges): FK enforcement is off. Proceed to Step 3.
+- **If all nine new tests PASS:** FK enforcement is on by default over the web client for every edge/endpoint/direction. No client change needed. Skip to Step 4.
+- **If any FAIL** (a cross-project insert succeeds / a cascade leaves edges): FK enforcement is off or a composite FK is mis-wired. If *all* cross-project/cascade tests fail uniformly, FK enforcement is globally off → Step 3. If only one edge/direction fails, the corresponding `foreignKey(...)` column order in Task 7 is wrong (realign `[t.projectId, t.Xid]` with the parent's `unique(...).on(projectId, id)`) before Step 3.
 
 - [ ] **Step 3: (Conditional) Enable FK enforcement in `createDb`**
 
@@ -1058,7 +1126,7 @@ Run (DB up): the controller itself runs
 ```bash
 pnpm --filter @veritra/db exec vitest run && pnpm typecheck
 ```
-Expected: GREEN, including the two FK tests. Do not accept the subagent's word on this gate.
+Expected: GREEN, including all nine FK tests (3 edges × {parent-cascade, child-cascade, cross-project-reject}). Do not accept the subagent's word on this gate.
 
 - [ ] **Step 5: Commit**
 
@@ -1071,18 +1139,21 @@ git commit -m "test(db): verify composite-FK same-project rejection + cascade en
 
 ## Task 9: Replace the spike `notes` slice with a minimal Project tRPC slice + integration-seam test (prereqs #1, #7)
 
-**Why:** Plan 1's `notes.add`/`notes.list` tRPC procedures, the `/` route rendering notes, and the tRPC integration test all reference the now-deleted `notes` table. Replace them with a **minimal** real-entity (Project) slice — `project.create` / `project.list` — so (a) nothing references `notes`, and (b) the SSR → `createServerFn` → `appRouter.createCaller` → `__env__` → libSQL seam (uncovered by an automated test in Plan 1) gets an explicit integration test. **Keep it minimal: no authz/roles (that is Plan 3).**
+**Why:** Plan 1's spike `notes` slice is wired across four files: the `notes` sub-router in `router.ts` (uses `schema.notes`), `notes-fn.ts` (a `createServerFn` that calls `appRouter.createCaller(...).notes.list()`), `routes/index.tsx` (loader calls `listNotes()` from `notes-fn.ts`), and `tests/trpc.integration.test.ts`. After Task 6 dropped the `notes` table, **all four break** — in particular `notes-fn.ts` will not compile (`caller.notes` no longer exists). Replace the slice with a **minimal** real-entity (Project) slice — `project.create` / `project.list` — so nothing references `notes`, and add a seam test that genuinely crosses the `globalThis.__env__` → `getWorkerEnv()` → Hono → tRPC → libSQL boundary (prereq #7). **Keep it minimal: no authz/roles — that is Plan 3.**
+
+> **Ground truth (verified):** `router.ts` imports `{ schema }` from `@veritra/db` and uses `schema.notes` — so the Project slice uses `schema.project` (namespace import, matching the existing pattern). The real SSR seam is `routes/api/$.tsx` → `app.fetch(request, getWorkerEnv())` and `notes-fn.ts` → `getWorkerEnv()` + `createDb` + `createCaller`. Importing `app` from `worker.ts` (a re-export of the standalone Hono `app`) and calling `app.request(path, init, env)` with `env` passed directly — as Plan 1's `auth.integration.test.ts` does — does **not** go through `getWorkerEnv()`/`__env__`. The seam test below therefore sets `globalThis.__env__` and reads it via `getWorkerEnv()` so the `__env__` binding is actually exercised.
 
 **Files:**
 - Modify: `apps/web/src/server/router.ts`, `apps/web/src/routes/index.tsx`, `apps/web/tests/trpc.integration.test.ts`
+- Rename + rewrite: `apps/web/src/server/notes-fn.ts` → `apps/web/src/server/projects-fn.ts`
 - Create: `apps/web/tests/seam.integration.test.ts`
 
-- [ ] **Step 1: Read the current router and SSR wiring**
+- [ ] **Step 1: Read the current wiring (all four touch points)**
 
 ```bash
-cat apps/web/src/server/router.ts apps/web/src/routes/index.tsx apps/web/tests/trpc.integration.test.ts
+cat apps/web/src/server/router.ts apps/web/src/server/notes-fn.ts apps/web/src/routes/index.tsx apps/web/tests/trpc.integration.test.ts apps/web/src/routes/api/\$.tsx apps/web/src/server/env.ts
 ```
-Note: how `ping` is defined (keep it), how `notes.add`/`notes.list` use `ctx.db` + `schema.notes`, how `index.tsx` loads data via `createServerFn` (the SSR path), and the exact `createCaller({ db, session })` shape used in the test.
+Note: `router.ts` uses `schema.notes` via the `{ schema }` namespace import; `notes-fn.ts` exports `listNotes = createServerFn().handler(...)` calling `caller.notes.list()` with `getWorkerEnv()` + `createDb`; `index.tsx` imports `listNotes` and renders `notes`; `api/$.tsx` is the real seam (`app.fetch(request, getWorkerEnv())`).
 
 - [ ] **Step 2: Rewrite the integration test (notes → project)**
 
@@ -1131,26 +1202,32 @@ Expected: FAIL — `project` router not defined.
 
 - [ ] **Step 4: Implement the Project slice in the router**
 
-In `apps/web/src/server/router.ts`: remove the `notes` sub-router and its `schema.notes` usage; add a `project` sub-router. Keep `ping`, `me`, and the existing `import` of `schema`/`publicProcedure`/`protectedProcedure`. Add:
+In `apps/web/src/server/router.ts`: remove the `notes` sub-router (and its `schema.notes` usage), add a `project` sub-router, and add the `import * as v from "valibot"` if it is not already present (Plan 1's router already imports valibot as `v` for `ping` — reuse it). Keep `me`, `ping`, and the existing `{ schema }` namespace import. The router becomes:
 ```ts
 import * as v from "valibot";
-import { project } from "@veritra/db/schema";
-// inside appRouter = router({ ... }):
+import { router, publicProcedure, protectedProcedure } from "./trpc";
+import { schema } from "@veritra/db";
+
+const PingInput = v.object({ name: v.pipe(v.string(), v.minLength(1)) });
+const ProjectCreateInput = v.object({
+  title: v.pipe(v.string(), v.minLength(1)),
+  createdBy: v.pipe(v.string(), v.minLength(1)),
+});
+
+export const appRouter = router({
+  me: protectedProcedure.query(({ ctx }) => ({ userId: ctx.session.userId })),
+
+  ping: publicProcedure
+    .input((raw) => v.parse(PingInput, raw))
+    .query(({ input }) => ({ message: `hello ${input.name}` })),
+
   project: router({
     create: publicProcedure
-      .input((raw) =>
-        v.parse(
-          v.object({
-            title: v.pipe(v.string(), v.minLength(1)),
-            createdBy: v.pipe(v.string(), v.minLength(1)),
-          }),
-          raw,
-        ),
-      )
+      .input((raw) => v.parse(ProjectCreateInput, raw))
       .mutation(async ({ ctx, input }) => {
         const id = `proj-${crypto.randomUUID()}`;
         const now = new Date();
-        await ctx.db.insert(project).values({
+        await ctx.db.insert(schema.project).values({
           id,
           title: input.title,
           createdAt: now,
@@ -1159,11 +1236,12 @@ import { project } from "@veritra/db/schema";
         });
         return { id };
       }),
-    list: publicProcedure.query(({ ctx }) => ctx.db.select().from(project)),
+    list: publicProcedure.query(({ ctx }) => ctx.db.select().from(schema.project)),
   }),
-```
+});
 
-> Use the `@veritra/db/schema` subpath export (already declared in `packages/db/package.json` `exports`) or the existing `schema` namespace import the file already uses — match whichever pattern `router.ts` already follows for `notes`.
+export type AppRouter = typeof appRouter;
+```
 
 - [ ] **Step 5: Run the test, verify it passes**
 
@@ -1173,74 +1251,118 @@ pnpm --filter @veritra/web exec vitest run tests/trpc.integration.test.ts
 ```
 Expected: PASS (4 tests).
 
-- [ ] **Step 6: Update the SSR `/` route to render projects**
+- [ ] **Step 6: Rename `notes-fn.ts` → `projects-fn.ts` and point it at `project.list`**
 
-In `apps/web/src/routes/index.tsx`: change the loader/`createServerFn` that called `notes.list` to call `project.list`, and render `p.title` rows. Keep the exact `createServerFn` + `appRouter.createCaller` SSR pattern Plan 1 established (do not switch to relative-URL `httpBatchLink` — it is not SSR-usable). Example body:
-```tsx
-// loader returns { projects } via the existing server-fn that builds a caller from __env__
-<ul>{projects.map((p) => <li key={p.id}>{p.title}</li>)}</ul>
+This is required for compilation: `notes-fn.ts` calls `caller.notes.list()`, which no longer exists. Create `apps/web/src/server/projects-fn.ts` (and `git rm apps/web/src/server/notes-fn.ts`):
+```ts
+import { createServerFn } from "@tanstack/react-start";
+import { createDb } from "@veritra/db";
+import { appRouter } from "./router";
+import { getWorkerEnv } from "./env";
+
+// SSR-safe project fetch: the index loader runs on the server during SSR and on
+// the client during navigation. Wrapping the tRPC call in a server function
+// keeps DB access server-only and avoids the relative-URL httpBatchLink problem
+// during SSR. We call the router directly (createCaller) — project.list is a
+// publicProcedure needing only ctx.db, so no auth/session plumbing here.
+export const listProjects = createServerFn().handler(async () => {
+  const env = getWorkerEnv();
+  const db = createDb(env.LIBSQL_URL, env.LIBSQL_AUTH_TOKEN);
+  const caller = appRouter.createCaller({ db, session: null });
+  return caller.project.list();
+});
 ```
 
-- [ ] **Step 7: Write the integration-seam test (prereq #7)**
+- [ ] **Step 7: Update the SSR `/` route to render projects**
 
-This exercises the SSR server-route seam end-to-end (Hono mounted under Start `api/$.tsx`, `__env__`, libSQL) via the Worker's `fetch`, not just the in-process caller. `apps/web/tests/seam.integration.test.ts`:
+`apps/web/src/routes/index.tsx` — swap the import and the loader/render from notes to projects (keep the `createServerFn` SSR pattern; do not introduce a relative-URL `httpBatchLink`):
+```tsx
+import { createFileRoute } from "@tanstack/react-router";
+import { listProjects } from "../server/projects-fn";
+
+export const Route = createFileRoute("/")({
+  loader: async () => ({ projects: await listProjects() }),
+  component: Home,
+});
+
+function Home() {
+  const { projects } = Route.useLoaderData();
+  return (
+    <main>
+      <h1>Veritra</h1>
+      <ul>
+        {projects.map((p) => (
+          <li key={p.id}>{p.title}</li>
+        ))}
+      </ul>
+      <a href="/login">login</a>
+    </main>
+  );
+}
+```
+
+- [ ] **Step 8: Write the integration-seam test (prereq #7)**
+
+This crosses the real seam: `globalThis.__env__` → `getWorkerEnv()` → Hono (`app`) → tRPC → `createDb` → libSQL — the same composition `routes/api/$.tsx` uses (`app.fetch(request, getWorkerEnv())`). `apps/web/tests/seam.integration.test.ts`:
 ```ts
 import { describe, it, expect } from "vitest";
+import app from "../src/worker"; // standalone Hono entry (re-exports server/hono-app `app`)
+import { getWorkerEnv } from "../src/server/env";
 
-// The Worker entry mounts Hono under the TanStack Start server route (Approach B).
-// Import the same entry the integration tests use; match the import the Plan 1
-// auth.integration.test.ts used for `app`/handler (read that file for the exact path).
-import app from "../src/worker";
+const testEnv = {
+  LIBSQL_URL: process.env.LIBSQL_URL ?? "http://127.0.0.1:8080",
+  AUTH_SECRET: "test-secret-please-change",
+  BASE_URL: "http://localhost",
+};
 
-function testEnv() {
-  return {
-    LIBSQL_URL: process.env.LIBSQL_URL ?? "http://127.0.0.1:8080",
-    AUTH_SECRET: "test-secret-please-change",
-    BASE_URL: "http://localhost",
-  };
-}
+describe("integration seam: __env__ → getWorkerEnv → Hono → tRPC → libSQL", () => {
+  it("reads worker env from globalThis.__env__ and round-trips a project through the mounted Hono app", () => {
+    // The Start server route (routes/api/$.tsx) does app.fetch(request, getWorkerEnv()).
+    // getWorkerEnv() reads globalThis.__env__ (the Nitro cloudflare_module binding).
+    // Set it, prove it resolves, then drive the exact same composition.
+    (globalThis as { __env__?: typeof testEnv }).__env__ = testEnv;
+    const env = getWorkerEnv(); // throws if the __env__ binding seam is broken
+    expect(env.LIBSQL_URL).toBe(testEnv.LIBSQL_URL);
 
-describe("integration seam: tRPC over the worker fetch path", () => {
-  it("creates and lists a project through the mounted Hono /api/trpc route", async () => {
-    const title = `Seam-${crypto.randomUUID()}`;
-    const create = await app.request(
-      "/api/trpc/project.create",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title, createdBy: "seam-user" }),
-      },
-      testEnv(),
-    );
-    expect(create.ok).toBe(true);
+    return (async () => {
+      const title = `Seam-${crypto.randomUUID()}`;
+      const create = await app.fetch(
+        new Request("http://localhost/api/trpc/project.create", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title, createdBy: "seam-user" }),
+        }),
+        env,
+      );
+      expect(create.ok).toBe(true);
 
-    const list = await app.request("/api/trpc/project.list", {}, testEnv());
-    expect(list.ok).toBe(true);
-    const body = await list.text();
-    expect(body).toContain(title);
+      const list = await app.fetch(new Request("http://localhost/api/trpc/project.list"), env);
+      expect(list.ok).toBe(true);
+      expect(await list.text()).toContain(title);
+    })();
   });
 });
 ```
 
-> **Adapt to the real seam:** Plan 1's `auth.integration.test.ts` already drives the Worker via `app.request(path, init, env)`. Read it first and mirror its exact entry import and env-passing convention. If Plan 1 exposes the SSR seam differently (e.g., a `createServerFn` caller rather than `app.request`), test *that* path instead — the goal (prereq #7) is one automated test crossing the SSR/`__env__`/server-route boundary, however Plan 1 wired it. Do not invent a new entry point.
+> **tRPC HTTP shape:** a single (non-batched) mutation is `POST /api/trpc/project.create` with the raw input JSON as the body (matches the Plan 1 `notes.add` curl in the foundation plan); a no-input query is `GET /api/trpc/project.list`. If the resolved `@hono/trpc-server` expects batching, align with how Plan 1's `hono-app.ts` mounts it (`endpoint: "/api/trpc"`) and the foundation plan's `ping` curl. The full Nitro HTTP → Start-route dispatch + SSR rendering of `index.tsx` is **not** unit-testable here; it stays covered by Plan 1's `wrangler dev` acceptance (run `pnpm dev` and `curl` `/` if you want to re-confirm), while this test covers `__env__` + Hono + tRPC + db deterministically in-process.
 
-- [ ] **Step 8: Run the seam test, verify it passes**
+- [ ] **Step 9: Run the seam test, verify it passes**
 
 Run (DB up):
 ```bash
 pnpm --filter @veritra/web exec vitest run tests/seam.integration.test.ts
 ```
-Expected: PASS. (If the tRPC GET/POST URL shape differs, align with how Plan 1's worker mounts `@hono/trpc-server` — check `apps/web/src/server` and the Plan 1 `ping` curl in the foundation plan.)
+Expected: PASS.
 
-- [ ] **Step 9: CONTROLLER VERIFY — full suite + build + typecheck**
+- [ ] **Step 10: CONTROLLER VERIFY — full suite + build + typecheck**
 
 The controller runs (DB up):
 ```bash
 pnpm build && pnpm typecheck && pnpm test:run
 ```
-Expected: all green; no reference to `notes` remains (`grep -rn "notes" apps/web/src packages/db/src` returns nothing meaningful).
+Expected: all green; no reference to `notes` remains (`grep -rn "notes" apps/web/src packages/db/src` returns nothing meaningful — `notes-fn.ts` is renamed to `projects-fn.ts`).
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add -A
@@ -1619,6 +1741,22 @@ describe("computeCoverage — deterministic ordering", () => {
       order.indexOf("testCase:t1:orphan"),
     );
   });
+
+  it("uses each entity's own createdAt even when an id collides across entity types", () => {
+    // A requirement and a condition share the id "dup". If createdAt were keyed by
+    // id alone, the condition's createdAt (1) would overwrite the requirement's (5),
+    // wrongly ordering "dup" before "zzz" among the requirement gaps.
+    const input = {
+      ...emptyInput(),
+      requirements: [node("dup", 5), node("zzz", 4)],
+      conditions: [node("dup", 1)],
+    };
+    const { gaps } = computeCoverage(input);
+    const order = gaps.map((g) => g.id);
+    expect(order.indexOf("requirement:zzz:uncovered-requirement")).toBeLessThan(
+      order.indexOf("requirement:dup:uncovered-requirement"),
+    );
+  });
 });
 ```
 
@@ -1652,7 +1790,7 @@ In `packages/core/src/coverage.ts`:
   });
 ```
 
-(b) Build a `createdAt` lookup and stable-sort the gaps before returning:
+(b) Build a `createdAt` lookup **keyed by `${type}:${id}`** and stable-sort the gaps before returning. Keying by id alone is a bug: ids are per-table primary keys, not globally unique, so a Requirement and a Condition sharing an id would overwrite each other's timestamp and corrupt the same-type `createdAt` comparison. Key by type+id:
 ```ts
   const typeOrder: Record<EntityType, number> = {
     requirement: 0,
@@ -1660,14 +1798,19 @@ In `packages/core/src/coverage.ts`:
     condition: 2,
     testCase: 3,
   };
-  const createdAtById = new Map<string, number>();
-  for (const n of [...input.requirements, ...input.viewpoints, ...input.conditions, ...input.testCases]) {
-    createdAtById.set(n.id, n.createdAt);
-  }
+  const createdAtByKey = new Map<string, number>();
+  const remember = (type: EntityType, nodes: readonly CoverageNode[]) => {
+    for (const n of nodes) createdAtByKey.set(`${type}:${n.id}`, n.createdAt);
+  };
+  remember("requirement", input.requirements);
+  remember("viewpoint", input.viewpoints);
+  remember("condition", input.conditions);
+  remember("testCase", input.testCases);
+
   gaps.sort((a, b) => {
     if (typeOrder[a.type] !== typeOrder[b.type]) return typeOrder[a.type] - typeOrder[b.type];
-    const ca = createdAtById.get(a.entityId) ?? 0;
-    const cb = createdAtById.get(b.entityId) ?? 0;
+    const ca = createdAtByKey.get(`${a.type}:${a.entityId}`) ?? 0;
+    const cb = createdAtByKey.get(`${b.type}:${b.entityId}`) ?? 0;
     if (ca !== cb) return ca - cb;
     if (a.entityId !== b.entityId) return a.entityId < b.entityId ? -1 : 1;
     return a.rule < b.rule ? -1 : a.rule > b.rule ? 1 : 0; // stable tie-break within same entity
@@ -1706,11 +1849,12 @@ git commit -m "feat(core): coverage reach-count (distinct cases) + deterministic
 ## Self-Review (against spec §3 and §4)
 
 - **§3.1 entities** (Project/Requirement/Viewpoint/Condition/TestCase/User+Membership; `project_id`, `created_at/updated_at/created_by`, `archived_at`; TestCase `provenance`; Viewpoint `memo`; Requirement `source`): Tasks 6 (+ existing `user`). ✓ `created_by` is plain text by design decision #6. ✓
-- **§3.2 links** (3 join tables, `project_id`, `position` fractional, `(親,子)` UNIQUE via composite PK, `derivation` on `condition_case`, same-project enforced): Tasks 4 (position), 7 (edges + composite FK), 8 (enforcement verified). ✓
+- **§3.2 links** (3 join tables, `project_id`, `position` fractional, `(親,子)` UNIQUE via composite PK, `derivation` on `condition_case`, same-project enforced): Tasks 4 (position), 7 (edges + composite FK), 8 (enforcement verified across **all 3 edges × both endpoint cascades × cross-project rejection with two real projects** — the hard gate is not narrowed to one FK). ✓
 - **§3.3 invariants** (id independent of placement; child under multiple parents; derivation on edge; TestCase separate from Run/Result): schema places order/derivation on edges (Task 7); `childPlacementCount` expresses multi-parent sharing (Task 5); no Run/Result fields on TestCase. ✓
 - **§3.4 delete/integrity** (edge FK CASCADE; no direct entity-entity FK; project_id cascade; created_by retained; last-admin not in schema): Tasks 6–8; decisions #6, #7. ✓ ("remove-from-here vs delete" pure semantics = `removePlacement` + `childPlacementCount`, Task 5; archive/physical-delete API is Plan 3.)
 - **§4.1 contract** (active-only target set; `COUNT(DISTINCT case_id)`; covered definition; orphan target types incl. Requirement excluded; stable `(type,created_at,id)` sort; deterministic `type:entity_id:rule` gap IDs): Tasks 10–12. ✓ (Active-filter is the caller's job per decision #2; core defensively drops dangling edges — Task 10 test.)
-- **§4.2 rules** (uncovered requirement/viewpoint/condition, orphan, reach-count): Tasks 10–12. ✓
+- **§4.2 rules** (uncovered requirement/viewpoint/condition, orphan, reach-count): Tasks 10–12. ✓ (Gap ordering keys `createdAt` by `${type}:${id}` to survive cross-type id collisions — Task 12 regression test.)
+- **valibot validation scope:** Task 3 *defines + unit-tests* the JSON/enum validators; **runtime row parsing at the read/write boundary is deferred to Plan 3** (decision #5). Plan 2 deliberately does not claim runtime enforcement — `$type<>()` is compile-time only.
 - **Prereqs / Plan-1 backlog**: #1 spike residue (core: Task 3; db notes: Task 6; notes slice: Task 9) ✓ · #2 typecheck-all (Task 2) ✓ · #3 drop node types (Task 2) ✓ · #4 core tsconfig (Task 2) ✓ · #5 drizzle-orm version + CI build (Tasks 1, 2) ✓ · #6 FK CASCADE/PRAGMA (Task 8) ✓ · #7 integration-seam test (Task 9) ✓
 - **Out of scope (correctly deferred):** tRPC CRUD/authz/roles/invites/last-admin enforcement → Plan 3; tree + case-table UI + coverage view + Storybook + E2E → Plan 4. The Task 9 Project slice is deliberately minimal (no authz) and exists only to remove `notes` and cover the seam.
 
