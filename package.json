@@ -10,10 +10,11 @@
     "build": "pnpm --filter @veritra/web build",
     "dev": "pnpm build && { cp -f .dev.vars apps/web/.output/server/.dev.vars 2>/dev/null || true; } && wrangler dev -c apps/web/.output/server/wrangler.json",
     "db:up": "docker compose up -d",
-    "db:migrate": "pnpm --filter @veritra/db migrate"
+    "db:migrate": "pnpm --filter @veritra/db migrate",
+    "typecheck": "tsc -p apps/web/tsconfig.json"
   },
   "devDependencies": {
-    "typescript": "^6.0.0",
+    "typescript": "7.0.1-rc",
     "vite": "^8.0.0",
     "vite-plus": "0.2.1",
     "vitest": "4.1.9",

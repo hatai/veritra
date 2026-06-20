@@ -1,3 +1,10 @@
 packages:
   - "packages/*"
   - "apps/*"
+
+overrides:
+  typescript: "7.0.1-rc"
+
+peerDependencyRules:
+  allowedVersions:
+    typescript: "7.0.1-rc"
