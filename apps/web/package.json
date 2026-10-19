@@ -15,7 +15,7 @@
     "valibot": "^1.0.0",
     "better-auth": "^1.2.0",
     "@tanstack/react-router": "~1.170.0",
-    "@tanstack/react-start": "~1.168.0",
+    "@tanstack/react-start": "~1.168.60",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
